@@ -1,6 +1,6 @@
 ---
 name: xsai-relay-query-skill
-description: Use when an agent needs read-only Xingsuan relay balance, usage, rankings, request history, errors, or model status.
+description: 用户询问星算账户余额、还剩多少额度、词元/用量、花了多少钱、日周月消耗、模型排行、请求记录、调用报错时使用；只读查询星算中转账户数据，不做充值、下单、支付或任何写操作。Use when the user asks about Xingsuan relay balance, remaining credit, token usage, spend, model rankings, request history, or errors.
 ---
 
 # 星算中转查询 Skill

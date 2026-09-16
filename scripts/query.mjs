@@ -7,6 +7,9 @@ const CONSUMER_CLIENT_ID = "xsai-relay-skill";
 const BASE_URL = process.env.XSAI_QUERY_BASE_URL || "https://api.xsai5.xyz";
 const AUTH_BASE_URL = process.env.XSAI_QUERY_AUTH_BASE_URL || "https://xsai5.xyz";
 const ALLOWED = new Set(["models", "balance", "usage", "rankings", "requests", "errors", "help", "auth"]);
+// 只读查询套件需要的全部权限;不带 --scope 时按这个申请,否则用户第一次
+// 查余额就会撞 403 而不得不重新授权一遍。
+const FULL_SCOPES = ["media.list_models", "media.read_capabilities", "media.query_balance", "media.query_usage", "media.query_rankings", "media.query_requests", "media.query_errors"];
 const runtime = createExternalSkillRuntime({
   clientId: CLIENT_ID,
   consumerClientId: CONSUMER_CLIENT_ID,
@@ -14,7 +17,7 @@ const runtime = createExternalSkillRuntime({
   defaultAuthBaseUrl: AUTH_BASE_URL,
   stateEnv: "XSAI_QUERY_STATE_DIR",
   stateName: "xsai",
-  defaultScopes: ["media.list_models", "media.read_capabilities"]
+  defaultScopes: FULL_SCOPES
 });
 const { readState, removeState, tokenFromRefresh, login } = runtime;
 
@@ -34,7 +37,7 @@ function parseQueryArgs(argv) {
 
 function normalizeQueryError(error) {
   const code = String(error?.code || "query_failed").replace(/[^a-z0-9_\-]/gi, "_").slice(0, 64);
-  const known = new Set(["auth_required", "auth_recovery_required", "auth_busy", "unsupported_command", "invalid_request", "invalid_scope", "not_found", "timeout"]);
+  const known = new Set(["auth_required", "auth_recovery_required", "auth_busy", "unsupported_command", "invalid_request", "invalid_scope", "scope_required", "not_found", "timeout"]);
   return { code, message: known.has(code) ? String(error.message || "请求失败") : "查询服务暂时不可用，请稍后重试。" };
 }
 async function token(fetchImpl = globalThis.fetch) { return tokenFromRefresh(await readState(), fetchImpl); }

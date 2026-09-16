@@ -1,1 +1,1 @@
-{"name":"@xingsuan/xsai-external-skill-runtime","version":"0.3.0","type":"module","private":true,"exports":"./runtime.mjs"}
+{"name": "@xingsuan/xsai-external-skill-runtime", "version": "0.4.0", "type": "module", "private": true, "exports": "./runtime.mjs"}

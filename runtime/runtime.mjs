@@ -136,6 +136,17 @@ export function createExternalSkillRuntime({
     return body;
   }
 
+  // 只有这些错误才说明授权本身真的不可用、必须重新走一次授权。其余（断网、
+  // 超时、5xx、限流、响应损坏）都是暂时性故障：曾经把它们一并当成"状态损坏"，
+  // 结果一次网络抖动就把技能永久锁死 —— 连 auth login 都进不去，只能手删状态文件。
+  const FATAL_AUTH_CODES = new Set(["invalid_grant", "invalid_client", "access_denied", "expired_token", "unauthorized"]);
+  function isFatalAuthError(error) {
+    const code = String(error?.code || "");
+    if (code === "invalid_scope") return false;
+    if (FATAL_AUTH_CODES.has(code)) return true;
+    return Number(error?.status) === 401;
+  }
+
   async function tokenFromRefresh(state, fetchImpl = globalThis.fetch, signal) {
     if (!state?.refresh_token) {
       throw Object.assign(new Error("请先完成设备授权"), { code: "auth_required" });
@@ -144,7 +155,7 @@ export function createExternalSkillRuntime({
     return withAuthLock(async () => {
     const latest = await readState();
     if (!latest?.refresh_token) throw Object.assign(new Error("请先完成设备授权"), { code: "auth_required" });
-    if (latest.auth_recovery_required) throw Object.assign(new Error("授权状态需要恢复，请重新登录"), { code: "auth_recovery_required" });
+    if (latest.auth_recovery_required) throw Object.assign(new Error("授权状态需要恢复，请运行 auth login 重新授权"), { code: "auth_recovery_required" });
     await writeState({ ...latest, refresh_in_flight: { started_at: new Date().toISOString() } });
     const body = new URLSearchParams({
       client_id: clientId,
@@ -163,8 +174,9 @@ export function createExternalSkillRuntime({
       },
       fetchImpl
     ); } catch (error) {
-      if (error.code === "invalid_scope") await writeState({ ...latest, refresh_in_flight: undefined });
-      else await writeState({ ...latest, auth_recovery_required: true });
+      const next = { ...latest, refresh_in_flight: undefined };
+      if (isFatalAuthError(error)) next.auth_recovery_required = true;
+      await writeState(next);
       throw error;
     }
     if (!token?.access_token) {
@@ -189,6 +201,13 @@ export function createExternalSkillRuntime({
     }, { wait: true });
   }
 
+  // 服务端对"授权里没有这个 scope"的响应是 403 + permission_error。它是**可修复**的:
+  // 用户重新跑一次 auth login 拿到完整权限即可。把它原样抛成 http_403,用户只会看到
+  // 一句看不出下一步的失败;这里统一映射成 scope_required 并附带修复命令。
+  function scopeHintFor(pathname) {
+    return `权限不足:当前授权不包含该操作。请重新运行 auth login 申请完整权限后重试(${pathname})`;
+  }
+
   async function apiRequest(pathname, { method = "GET", token, body, headers = {}, signal, fetchImpl = globalThis.fetch } = {}) {
     const requestHeaders = { accept: "application/json", ...headers, authorization: `Bearer ${token}` };
     let payload = body;
@@ -197,12 +216,19 @@ export function createExternalSkillRuntime({
       payload = JSON.stringify(body);
     }
     const state = await readState();
-    return fetchJson(endpoint(trustedBaseUrl(state?.base_url, configuredBaseUrl), pathname), {
-      method,
-      signal,
-      headers: requestHeaders,
-      body: payload
-    }, fetchImpl);
+    try {
+      return await fetchJson(endpoint(trustedBaseUrl(state?.base_url, configuredBaseUrl), pathname), {
+        method,
+        signal,
+        headers: requestHeaders,
+        body: payload
+      }, fetchImpl);
+    } catch (error) {
+      if (Number(error?.status) === 403) {
+        throw Object.assign(new Error(scopeHintFor(pathname)), { code: "scope_required", status: 403 });
+      }
+      throw error;
+    }
   }
 
   async function authorizedRequest(pathname, options = {}) {
@@ -258,12 +284,15 @@ export function createExternalSkillRuntime({
     const authBaseUrl = configuredAuthBaseUrl;
     const existing = await readState();
     const granted = Array.isArray(existing?.scopes) ? existing.scopes : String(existing?.scopes || "").split(/\s+/).filter(Boolean);
-    if (existing?.refresh_token && requested.every((scope) => granted.includes(scope))) {
+    const reusable = Boolean(existing?.refresh_token) && !existing?.auth_recovery_required;
+    if (reusable && requested.every((scope) => granted.includes(scope))) {
       try {
         await tokenFromRefresh(existing, fetchImpl);
         return { status: "authorized", reused: true, scopes: requested };
       } catch (error) {
-        if (error.code !== "invalid_scope") throw error;
+        // 权限不足、或状态已标记需要恢复时，继续往下走一次完整的设备授权 ——
+        // 这条分支本身就是恢复路径，不能把用户又弹回同一个死胡同。
+        if (error.code !== "invalid_scope" && error.code !== "auth_recovery_required") throw error;
       }
     }
     return withAuthLock(async () => {
@@ -273,7 +302,9 @@ export function createExternalSkillRuntime({
       consumer_client_id: consumerClientId,
       scope: requested.join(" ")
     });
-    if (latest?.refresh_token) body.set("refresh_token", latest.refresh_token);
+    // 状态被标记为需要恢复时，旧 refresh_token 可能已被消费或撤销；再拿它换取授权
+    // 会命中服务端的 refresh replay 检测，反而把整个共享 Grant 撤销掉。
+    if (latest?.refresh_token && !latest.auth_recovery_required) body.set("refresh_token", latest.refresh_token);
     const device = await fetchJson(endpoint(authBaseUrl, "/api/external/v1/device/authorize"), {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
