@@ -6,9 +6,9 @@
   "source": "xingsuan",
   "official_badge": "星算官方",
   "icon_url": "/images/desktop/xsai-relay-query-skill.png",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "repository": "lianying1716/xsai-relay-query-skill",
-  "git_ref": "v1.2.0",
+  "git_ref": "v1.3.0",
   "install_payload": {
     "repo": "lianying1716/xsai-relay-query-skill",
     "path": ".",
@@ -20,7 +20,7 @@
       "runtime/package.json"
     ]
   },
-  "runtime_version": "0.4.0",
+  "runtime_version": "0.5.0",
   "minimum_node": ">=18",
   "install_mode": "github_repo_root",
   "desktop_source_untouched": true

@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 import process from "node:process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { createExternalSkillRuntime } from "../runtime/runtime.mjs";
 
 const CLIENT_ID = "xsai-external-skills";
 const CONSUMER_CLIENT_ID = "xsai-relay-skill";
 const BASE_URL = process.env.XSAI_QUERY_BASE_URL || "https://api.xsai5.xyz";
 const AUTH_BASE_URL = process.env.XSAI_QUERY_AUTH_BASE_URL || "https://xsai5.xyz";
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ALLOWED = new Set(["models", "balance", "usage", "rankings", "requests", "errors", "help", "auth"]);
 // 只读查询套件需要的全部权限;不带 --scope 时按这个申请,否则用户第一次
 // 查余额就会撞 403 而不得不重新授权一遍。
@@ -15,6 +18,9 @@ const runtime = createExternalSkillRuntime({
   consumerClientId: CONSUMER_CLIENT_ID,
   defaultBaseUrl: BASE_URL,
   defaultAuthBaseUrl: AUTH_BASE_URL,
+  // 安装器写下的「客户端当时连的那对地址」就在技能根目录里。授权状态目录按这对
+  // 地址命名，缺了它，开发实例里客户端写进的授权技能永远找不到。
+  configDir: ROOT,
   stateEnv: "XSAI_QUERY_STATE_DIR",
   stateName: "xsai",
   defaultScopes: FULL_SCOPES
@@ -42,7 +48,7 @@ function normalizeQueryError(error) {
 }
 async function token(fetchImpl = globalThis.fetch) { return tokenFromRefresh(await readState(), fetchImpl); }
 async function request(pathname, params, fetchImpl = globalThis.fetch) {
-  const accessToken = await token(fetchImpl); const url = new URL(runtime.endpoint(BASE_URL, pathname)); Object.entries(params || {}).forEach(([key, value]) => { if (value !== undefined && value !== "") url.searchParams.set(key, String(value)); });
+  const accessToken = await token(fetchImpl); const url = new URL(runtime.endpoint(runtime.baseUrl(), pathname)); Object.entries(params || {}).forEach(([key, value]) => { if (value !== undefined && value !== "") url.searchParams.set(key, String(value)); });
   return runtime.fetchJson(url, { headers: { accept: "application/json", authorization: `Bearer ${accessToken}` } }, fetchImpl);
 }
 async function main(argv = process.argv.slice(2), fetchImpl = globalThis.fetch) {

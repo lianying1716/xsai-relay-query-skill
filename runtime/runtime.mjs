@@ -1,13 +1,55 @@
 import fs from "node:fs/promises";
-import { createWriteStream } from "node:fs";
+import { createWriteStream, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import crypto from "node:crypto";
 
+/**
+ * 安装器写在技能根目录里的运行时配置。
+ *
+ * 它存在的唯一理由：授权状态目录是 `sha256(auth_base_url + "\n" + base_url)` 的
+ * 前 24 位十六进制。客户端（星算助手）写授权时用的是**它当时连着的那对地址**，
+ * 而技能以前只会用写死的生产地址去算 —— 开发实例里客户端连 `192.168.2.7:3080`
+ * 写进 A 目录，技能按 `xsai5.xyz` 去 B 目录找，两个目录永远碰不上。用户看到的是
+ * 「明明授权过了，用的时候还让我再授权一次」。
+ *
+ * 所以安装器把这对地址随技能一起落盘，技能按它算目录，两边就落在同一处。
+ * 文件名以 `.` 开头：各家技能的扫描器都跳过隐藏文件，它不会污染技能的文件清单，
+ * 也不会被算成「装了一半」缺的那个文件。
+ */
+export const RUNTIME_CONFIG_FILE = ".xsai-runtime.json";
+
 function cleanBaseUrl(value) {
   return String(value || "").trim().replace(/\/+$/, "");
+}
+
+/**
+ * 把 `{ auth_base_url, base_url }` 收敛成两个**只有源**的地址。
+ *
+ * 读不到、不是 JSON、字段缺失或不合法都返回 null —— 一个坏掉的配置文件不该让
+ * 技能整个起不来，回落到写死的生产默认值即可（那正是它今天的行为）。
+ */
+function readRuntimeConfig(configDir) {
+  if (!configDir) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(path.join(configDir, RUNTIME_CONFIG_FILE), "utf8"));
+    if (!parsed || typeof parsed !== "object") return null;
+    const auth = originOnly(parsed.auth_base_url);
+    const api = originOnly(parsed.base_url);
+    return auth && api ? { authBaseUrl: auth, baseUrl: api } : null;
+  } catch { return null; }
+}
+
+function originOnly(value) {
+  const candidate = cleanBaseUrl(value);
+  if (!candidate) return "";
+  try {
+    const url = new URL(candidate);
+    if (!/^https?:$/.test(url.protocol) || url.username || url.password || url.search || url.hash || url.pathname !== "/") return "";
+    return url.origin;
+  } catch { return ""; }
 }
 
 function trustedBaseUrl(value, configured) {
@@ -41,13 +83,21 @@ export function createExternalSkillRuntime({
   consumerClientId = clientId,
   defaultBaseUrl,
   defaultAuthBaseUrl = defaultBaseUrl,
+  configDir,
   stateEnv,
   stateName,
   defaultScopes = [],
   now = Date.now
 }) {
-  const configuredBaseUrl = trustedBaseUrl(defaultBaseUrl, defaultBaseUrl);
-  const configuredAuthBaseUrl = trustedBaseUrl(defaultAuthBaseUrl, defaultAuthBaseUrl);
+  // 安装器注入的地址优先，但没有它就是今天的老行为（写死的生产默认值）——
+  // 手抄安装的技能、老版本装的技能都不会因此变砖。
+  //
+  // 注入值只要求「合法且只有源」：这份文件是我们自己的安装器写进技能目录的，
+  // 而技能目录本身就是用户可写的（用户能直接改 scripts/），它不构成新的信任边界。
+  // 真正的防护在下一层 —— 之后每个来自**状态文件**的地址都要和这里定下的值同源。
+  const injected = readRuntimeConfig(configDir);
+  const configuredBaseUrl = originOnly(injected?.baseUrl) || trustedBaseUrl(defaultBaseUrl, defaultBaseUrl);
+  const configuredAuthBaseUrl = originOnly(injected?.authBaseUrl) || trustedBaseUrl(defaultAuthBaseUrl, defaultAuthBaseUrl);
   const stateDir = () => {
     const configuredState = stateEnv && process.env[stateEnv];
     const sharedStateRoot = stateRoot(stateEnv, stateName);
@@ -362,6 +412,8 @@ export function createExternalSkillRuntime({
     stateDir,
     statePath,
     lockPath,
+    // 生效的地址（可能是安装器注入的）。脚本要拼请求 URL 时必须用这两个，
+    // 否则会和授权状态目录用的地址不是同一对。
     readState,
     writeState,
     removeState,
@@ -371,6 +423,8 @@ export function createExternalSkillRuntime({
     apiRequest,
     authorizedRequest,
     downloadFile,
-    login
+    login,
+    baseUrl: () => configuredBaseUrl,
+    authBaseUrl: () => configuredAuthBaseUrl
   };
 }

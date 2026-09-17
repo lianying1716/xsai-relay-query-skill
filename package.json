@@ -1,6 +1,6 @@
 {
   "name": "@xingsuan/xsai-relay-query-skill",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "private": false,
   "type": "module",
   "description": "星算中转只读查询 Skill：模型状态、余额、用量、排行、请求和错误。",
@@ -11,7 +11,7 @@
     "xsai-relay-query": "scripts/query.mjs"
   },
   "xsai": {
-    "runtimeVersion": "0.4.0",
+    "runtimeVersion": "0.5.0",
     "repositorySlug": "lianying1716/xsai-relay-query-skill"
   }
 }
